@@ -10,6 +10,12 @@ exports.register = async (req, res) => {
     return res.status(400).json({ message: "All fields are required" });
   }
 
+  if (password.length < 6) {
+    return res
+      .status(400)
+      .json({ message: "Password must be at least 6 characters long" });
+  }
+
   try {
     const hashed = await bcrypt.hash(password, 10);
     const user = new User({ name, email, password: hashed });
@@ -48,18 +54,34 @@ exports.forgotPassword = async (req, res) => {
   if (!user) return res.status(404).json({ error: "Email not found" });
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  setOTP(email, otp);
+
+  user.otp = otp;
+  user.otpExpiry = Date.now() + 15 * 60 * 1000;
+  await user.save();
+
   await sendOTP(email, otp);
+
   res.json({ message: "OTP sent to email" });
 };
 
-exports.verifyOtp = (req, res) => {
+exports.verifyOtp = async (req, res) => {
   const { email, otp } = req.body;
-  const isValid = verifyOTP(email, otp);
-  if (!isValid)
-    return res.status(400).json({ error: "Invalid or expired OTP" });
 
-  res.json({ message: "OTP verified" });
+  try {
+    const user = await User.findOne({ email });
+
+    if (!user || user.otp === null || user.otp !== parseInt(otp)) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+    }
+
+    user.otp = null;
+    await user.save();
+
+    res.json({ message: "OTP verified successfully" });
+  } catch (error) {
+    console.error("OTP verification error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
 };
 
 exports.resetPassword = async (req, res) => {
@@ -73,6 +95,13 @@ exports.resetPassword = async (req, res) => {
 exports.getUserByEmail = async (req, res) => {
   const email = req.params.email;
   const user = await User.findOne({ email });
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json({ user: { id: user.id, name: user.name, email: user.email } });
+};
+
+exports.getUserById = async (req, res) => {
+  const id = req.params.id;
+  const user = await User.findById(id);
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json({ user: { id: user.id, name: user.name, email: user.email } });
 };
@@ -92,7 +121,31 @@ exports.deleteUser = async (req, res) => {
   }
 };
 
+exports.deleteByID = async (req, res) => {
+  const id = req.params.id;
+
+  try {
+    const user = await User.findByIdAndDelete(id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({ message: `User with ID ${id} deleted successfully.` });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
 exports.getAllUsers = async (req, res) => {
+  try {
+    const users = await User.find({}, "-password -__v"); // Exclude password & __v
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+};
+
+exports.getAllUsersById = async (req, res) => {
   try {
     const users = await User.find({}, "-password -__v"); // Exclude password & __v
     res.json(users);
